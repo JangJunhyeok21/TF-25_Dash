@@ -1,0 +1,7 @@
+lib/**
+.pio/**
+**/test/**
+include/**
+.vscode/**
+doxygen/**
+.travis.yml
