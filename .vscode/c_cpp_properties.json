@@ -10,6 +10,7 @@
             "includePath": [
                 "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/include",
                 "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/src",
+                "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/TinyGPSPlus/src",
                 "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/KWP2000/src",
                 "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit NeoPixel",
                 "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/TM1637",
@@ -258,6 +259,7 @@
                 "path": [
                     "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/include",
                     "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/src",
+                    "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/TinyGPSPlus/src",
                     "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/KWP2000/src",
                     "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit NeoPixel",
                     "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/TM1637",
