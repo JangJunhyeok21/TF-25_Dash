@@ -7,8 +7,9 @@
 #include <stdint.h>
 #include <TM1637Display.h>
 #include <Adafruit_NeoPixel.h>
-#include <tinygps.h>
+#include <TinyGPSPlus.h>
 #include <FreeRTOS.h>
+#include "RTClib.h"
 #include "KWP2000.h"
 
 #define SCK_PIN 14
@@ -32,12 +33,12 @@
 #define gpsTX 20
 #define powerCheckPin A0
 
-attachInterrupt(digitalPinToInterrupt(powerCheckPin), []() {
-    if (analogRead(powerCheckPin) < 930) // 930 corresponds to ~2.8V on a 3.3V ADC scale
-    {
-        powerOffSequence();
-    }
-}, FALLING);
+// attachInterrupt(digitalPinToInterrupt(powerCheckPin), []() {
+//     if (analogRead(powerCheckPin) < 930) // 930 corresponds to ~2.8V on a 3.3V ADC scale
+//     {
+//         powerOffSequence();
+//     }
+// }, FALLING);
 
 /// 센서 데이터 구조체
 struct SensorData
@@ -46,6 +47,7 @@ struct SensorData
     uint16_t rpm, susFL, susFR, susRL, susRR, speed;
     int32_t latitude, longitude;
     uint8_t tps, gear;
+    DateTime timestamp;
     bool DTC;
 };
 
@@ -55,14 +57,15 @@ SemaphoreHandle_t dataMutex;
 
 // Adafruit MPU6050 객체
 Adafruit_MPU6050 mpu;
-TM1637Display display(CLK, DIO);
+//RTC모듈
+RTC_DS1307 rtc;
 
-Adafruit_NeoPixel leds(NUM_LEDS, WS2812_PIN, NEO_GRB + NEO_KHZ800);
 
-TinyGPSPlus gps; // GPS 객체 생성
-
-HardwareSerial kwpSerial(1); // UART1 사용
-KWP2000 kwp(&kwpSerial);
+// TM1637Display display(CLK, DIO);
+// Adafruit_NeoPixel leds(NUM_LEDS, WS2812_PIN, NEO_GRB + NEO_KHZ800);
+// TinyGPSPlus gps; // GPS 객체 생성
+// HardwareSerial kwpSerial(1); // UART1 사용
+// KWP2000 kwp(&kwpSerial);
 
 // Task 함수 프로토타입
 void SensorTask(void *pvParameters);
@@ -70,72 +73,45 @@ void LoggerTask(void *pvParameters);
 void DisplayTask(void *pvParameters);
 void TelemetryTask(void *pvParameters);
 
-//전원종료 시 종료시퀀스
-void powerOffSequence() {
-    lora.end(); // LoRa 종료
-    kwpSerial.end(); // KWP 종료
-    Serial1.end(); // GPS 종료
-}
-
-
+// // 전원종료 시 종료시퀀스
+// void powerOffSequence()
+// {
+//     lora.end();      // LoRa 종료
+//     kwpSerial.end(); // KWP 종료
+//     Serial1.end();   // GPS 종료
+// }
 
 void setup()
 {
     Serial.begin(115200);
-    display.setBrightness(0x0f);
-    leds.begin();
-    leds.show();
-
-    // WS2812 시동 세리모니 (1초 동안 LED 채우기 → 줄이기)
-    for (int i = 0; i <= NUM_LEDS; i++)
-    {
-        leds.clear();
-        for (int j = 0; j < i; j++)
-        {
-            leds.setPixelColor(j, leds.Color(0, 150, 255));
-        }
-        leds.show();
-        delay(30);
-    }
-    for (int i = NUM_LEDS; i >= 0; i--)
-    {
-        leds.clear();
-        for (int j = 0; j < i; j++)
-        {
-            leds.setPixelColor(j, leds.Color(0, 150, 255));
-        }
-        leds.show();
-        delay(30);
-    }
-
-    kwpSerial.begin(10400, SERIAL_8N1, KWP_RX, KWP_TX);
-    kwp.begin();
-
-    // LoRa 설정
-    SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, LORA_CS);
-    LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
-    if (!LoRa.begin(433E6))
-    {
-        Serial.println("LoRa 시작 실패!");
-        while (true)
-            ;
-    }
-    Serial.println("LoRa 시작 완료!");
-
     // I2C 및 MPU6050 초기화
-    Wire.begin();
-    if (!mpu.begin())
+    Wire.begin(36, 35);
+    if (!mpu.begin(0x69, &Wire))
     {
         Serial.println("MPU6050 초기화 실패!");
         while (1)
+        {
+            Serial.println("MPU6050 초기화 실패!");
             delay(10);
+        }
     }
     Serial.println("MPU6050 연결 성공!");
-
-    // NEO-n8m 초기화
-    Serial1.begin(9600, SERIAL_8N1, gpsRX, gpsTX);
-    delay(1000);                     // GPS 모듈 초기화 대기
-    Serial1.println("AT+CGNSPWR=1"); // GPS 모듈 전원 켜기
+    // RTC 초기화
+    if (! rtc.begin()) {
+        Serial.println("Couldn't find RTC");
+        Serial.flush();
+        while (1) delay(10);
+      }
+    
+      if (! rtc.isrunning()) {
+        Serial.println("RTC is NOT running, let's set the time!");
+        // When time needs to be set on a new device, or after a power loss, the
+        // following line sets the RTC to the date & time this sketch was compiled
+        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+        // This line sets the RTC with an explicit date & time, for example to set
+        // January 21, 2014 at 3am you would call:
+        // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
+      }
 
     // Queue 및 Mutex 생성
     sensorQueue = xQueueCreate(1, sizeof(SensorData));
@@ -143,14 +119,13 @@ void setup()
 
     // FreeRTOS Task 생성
     xTaskCreatePinnedToCore(SensorTask, "SensorTask", 2048, NULL, 3, NULL, 1);
-    xTaskCreatePinnedToCore(LoggerTask, "LoggerTask", 2048, NULL, 2, NULL, 1);
-    xTaskCreatePinnedToCore(DisplayTask, "DisplayTask", 2048, NULL, 2, NULL, 0);
-    xTaskCreatePinnedToCore(TelemetryTask, "TelemetryTask", 2048, NULL, 2, NULL, 0);
+    // xTaskCreatePinnedToCore(LoggerTask, "LoggerTask", 2048, NULL, 2, NULL, 1);
+    // xTaskCreatePinnedToCore(DisplayTask, "DisplayTask", 2048, NULL, 2, NULL, 0);
+    // xTaskCreatePinnedToCore(TelemetryTask, "TelemetryTask", 2048, NULL, 2, NULL, 0);
 }
 
 void loop()
 {
-    // FreeRTOS 사용 시 loop()는 비워두면된다.
 }
 
 void SensorTask(void *pvParameters)
@@ -161,23 +136,51 @@ void SensorTask(void *pvParameters)
     const TickType_t xFrequency = pdMS_TO_TICKS(20); // 20ms 주기 (50Hz)
     for (;;)
     {
-        while (Serial1.available())
-        {
-            gps.encode(Serial1.read());
-        }
+        // while (Serial1.available())
+        // {
+        //     gps.encode(Serial1.read());
+        // }
         // GPS 데이터 읽기
-        if (gps.location.isUpdated())
-        {
-            data.latitude = gps.location.lat() * 1000000;
-            data.longitude = gps.location.lng() * 1000000;
-            data.speed = gps.speed.kmph() * 1000;
-        }
+        // if (gps.location.isUpdated())
+        // {
+        //     data.latitude = gps.location.lat() * 1000000;
+        //     data.longitude = gps.location.lng() * 1000000;
+        //     data.speed = gps.speed.kmph() * 1000;
+        // }
+        sensors_event_t accelEvent, gyroEvent, tempEvent;
         mpu.getEvent(&accelEvent, &gyroEvent, &tempEvent);
+        data.accelX = (int16_t)(accelEvent.acceleration.x * 1000);
+        data.accelY = (int16_t)(accelEvent.acceleration.y * 1000);
+        data.accelZ = (int16_t)(accelEvent.acceleration.z * 1000);
+        data.yawRate = (int16_t)(gyroEvent.gyro.z * 1000);
+        data.timestamp = rtc.now();
+        
+        // 데이터 출력
+        Serial.print("Timestamp: ");
+        Serial.print(data.timestamp.year(), DEC);
+        Serial.print("/");
+        Serial.print(data.timestamp.month(), DEC);
+        Serial.print("/");
+        Serial.print(data.timestamp.day(), DEC);
+        Serial.print(" ");
+        Serial.print(data.timestamp.hour(), DEC);
+        Serial.print(":");
+        Serial.print(data.timestamp.minute(), DEC);
+        Serial.print(":");
+        Serial.print(data.timestamp.second(), DEC);
+        Serial.println();
+        Serial.print("Accel X: ");
+        Serial.print(data.accelX/1000.0);
+        Serial.print(" m/s^2, Y: ");
+        Serial.print(data.accelY/1000.0);
+        Serial.print(" m/s^2, Z: ");
+        Serial.print(data.accelZ/1000.0);
+        Serial.println(" m/s^2");
+        Serial.print("YawRate: ");
+        Serial.print(data.yawRate/1000.0);
+        Serial.println(" rad/s");
 
-        data.accelX = (int16_t)((accelEvent.acceleration.x / 9.80665f) * 1000);
-        data.accelY = (int16_t)((accelEvent.acceleration.y / 9.80665f) * 1000);
-        data.accelZ = (int16_t)((accelEvent.acceleration.z / 9.80665f) * 1000);
-
+        delay(1000);                                   // 데이터 출력 주기
         float degPerSec = gyroEvent.gyro.z * 57.2958f; // 센서 방향에 따라 축 변경필요
         data.yawRate = (int16_t)(degPerSec * 10);
 
@@ -195,112 +198,112 @@ void SensorTask(void *pvParameters)
 
 void LoggerTask(void *pvParameters)
 {
-    SensorData latest;
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(100); // 100ms 주기 (10Hz)
+    // SensorData latest;
+    // TickType_t xLastWakeTime = xTaskGetTickCount();
+    // const TickType_t xFrequency = pdMS_TO_TICKS(100); // 100ms 주기 (10Hz)
 
-    for (;;)
-    {
-        if (xQueueReceive(sensorQueue, &latest, portMAX_DELAY) == pdTRUE)
-        {
-            // SD 카드 기록 로직
-        }
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
-    }
+    // for (;;)
+    // {
+    //     if (xQueueReceive(sensorQueue, &latest, portMAX_DELAY) == pdTRUE)
+    //     {
+    //         // SD 카드 기록 로직
+    //     }
+    //     vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    // }
 }
 
 void DisplayTask(void *pvParameters)
 {
-    SensorData latest;
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(50); // 20Hz → 50ms로 확장
-    bool blinkState = false;
+    // SensorData latest;
+    // TickType_t xLastWakeTime = xTaskGetTickCount();
+    // const TickType_t xFrequency = pdMS_TO_TICKS(50); // 20Hz → 50ms로 확장
+    // bool blinkState = false;
 
-    display.clear();
-    leds.clear();
-    leds.show();
+    // display.clear();
+    // leds.clear();
+    // leds.show();
 
-    for (;;)
-    {
-        if (xQueueReceive(sensorQueue, &latest, portMAX_DELAY) == pdTRUE)
-        {
-            // TM1637 기어 + 냉각수 표시
-            display.showNumberDec(latest.gear * 1000 + latest.coolantTemp, true, 4, 0);
+    // for (;;)
+    // {
+    //     if (xQueueReceive(sensorQueue, &latest, portMAX_DELAY) == pdTRUE)
+    //     {
+    //         // TM1637 기어 + 냉각수 표시
+    //         display.showNumberDec(latest.gear * 1000 + latest.coolantTemp, true, 4, 0);
 
-            // WS2812 LED RPM 표시
-            uint16_t rpm = latest.rpm;
-            leds.clear();
+    //         // WS2812 LED RPM 표시
+    //         uint16_t rpm = latest.rpm;
+    //         leds.clear();
 
-            if (rpm >= 8500)
-            {
-                blinkState = !blinkState;
-                for (int i = 0; i < NUM_LEDS; i++)
-                {
-                    leds.setPixelColor(i, blinkState ? leds.Color(255, 0, 0) : 0);
-                }
-            }
-            else if (rpm >= 4000)
-            {
-                int active = map(rpm, 4000, 10000, 0, NUM_LEDS);
-                for (int i = 0; i < active; i++)
-                {
-                    if (i < 5)
-                        leds.setPixelColor(i, leds.Color(0, 255, 0));
-                    else if (i < 10)
-                        leds.setPixelColor(i, leds.Color(255, 200, 0));
-                    else
-                        leds.setPixelColor(i, leds.Color(255, 0, 0));
-                }
-            }
-            leds.show();
-            if (latest.DTC)
-            {
-                // DTC 발생 시 LED 점멸
-            }
-            if (latest.coolantTemp > 110)
-            {
-                // 냉각수 과열열 경고 LED 점멸
-            }
-            else if (latest.coolantTemp < 100 && latest.coolantTemp > 80)
-            {
-                // 냉각수 온도 정상일 때 LED 점멸 해제
-            }
-            else if (latest.coolantTemp < 70)
-            {
-                // 냉각수 온도 저온일 때 LED 점멸
-            }
-        }
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
-    }
+    //         if (rpm >= 8500)
+    //         {
+    //             blinkState = !blinkState;
+    //             for (int i = 0; i < NUM_LEDS; i++)
+    //             {
+    //                 leds.setPixelColor(i, blinkState ? leds.Color(255, 0, 0) : 0);
+    //             }
+    //         }
+    //         else if (rpm >= 4000)
+    //         {
+    //             int active = map(rpm, 4000, 10000, 0, NUM_LEDS);
+    //             for (int i = 0; i < active; i++)
+    //             {
+    //                 if (i < 5)
+    //                     leds.setPixelColor(i, leds.Color(0, 255, 0));
+    //                 else if (i < 10)
+    //                     leds.setPixelColor(i, leds.Color(255, 200, 0));
+    //                 else
+    //                     leds.setPixelColor(i, leds.Color(255, 0, 0));
+    //             }
+    //         }
+    //         leds.show();
+    //         if (latest.DTC)
+    //         {
+    //             // DTC 발생 시 LED 점멸
+    //         }
+    //         if (latest.coolantTemp > 110)
+    //         {
+    //             // 냉각수 과열열 경고 LED 점멸
+    //         }
+    //         else if (latest.coolantTemp < 100 && latest.coolantTemp > 80)
+    //         {
+    //             // 냉각수 온도 정상일 때 LED 점멸 해제
+    //         }
+    //         else if (latest.coolantTemp < 70)
+    //         {
+    //             // 냉각수 온도 저온일 때 LED 점멸
+    //         }
+    //     }
+    //     vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    // }
 }
 
 void TelemetryTask(void *pvParameters)
 {
-    SensorData latest;
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(100); // 100ms 주기 (10Hz)
+    // SensorData latest;
+    // TickType_t xLastWakeTime = xTaskGetTickCount();
+    // const TickType_t xFrequency = pdMS_TO_TICKS(100); // 100ms 주기 (10Hz)
 
-    for (;;)
-    {
-        if (xQueueReceive(sensorQueue, &latest, portMAX_DELAY) == pdTRUE)
-        {
-            // LoRa 전송 로직
-            LoRa.beginPacket();
-            LoRa.print(latest.accelX);      LoRa.print(",");
-            LoRa.print(latest.accelY);      LoRa.print(",");
-            LoRa.print(latest.accelZ);      LoRa.print(",");
-            LoRa.print(latest.speed);       LoRa.print(",");
-            LoRa.print(latest.latitude);    LoRa.print(",");
-            LoRa.print(latest.longitude);   LoRa.print(",");
-            LoRa.print(latest.rpm);         LoRa.print(",");
-            LoRa.print(latest.susFL);       LoRa.print(",");
-            LoRa.print(latest.susFR);       LoRa.print(",");
-            LoRa.print(latest.susRL);       LoRa.print(",");
-            LoRa.print(latest.susRR);       LoRa.print(",");
-            LoRa.print(latest.tps);         LoRa.print(",");
-            LoRa.print(latest.gear);        LoRa.print(",");
-            LoRa.print(latest.coolantTemp); LoRa.endPacket();
-        }
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
-    }
+    // for (;;)
+    // {
+    //     if (xQueueReceive(sensorQueue, &latest, portMAX_DELAY) == pdTRUE)
+    //     {
+    //         // LoRa 전송 로직
+    //         LoRa.beginPacket();
+    //         LoRa.print(latest.accelX);      LoRa.print(",");
+    //         LoRa.print(latest.accelY);      LoRa.print(",");
+    //         LoRa.print(latest.accelZ);      LoRa.print(",");
+    //         LoRa.print(latest.speed);       LoRa.print(",");
+    //         LoRa.print(latest.latitude);    LoRa.print(",");
+    //         LoRa.print(latest.longitude);   LoRa.print(",");
+    //         LoRa.print(latest.rpm);         LoRa.print(",");
+    //         LoRa.print(latest.susFL);       LoRa.print(",");
+    //         LoRa.print(latest.susFR);       LoRa.print(",");
+    //         LoRa.print(latest.susRL);       LoRa.print(",");
+    //         LoRa.print(latest.susRR);       LoRa.print(",");
+    //         LoRa.print(latest.tps);         LoRa.print(",");
+    //         LoRa.print(latest.gear);        LoRa.print(",");
+    //         LoRa.print(latest.coolantTemp); LoRa.endPacket();
+    //     }
+    //     vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    // }
 }
