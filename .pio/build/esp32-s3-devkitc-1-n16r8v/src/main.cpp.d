@@ -191,7 +191,7 @@
  .pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit\ BusIO/Adafruit_SPIDevice.h \
  .pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit\ Unified\ Sensor/Adafruit_Sensor.h \
  C:/.platformio/packages/framework-arduinoespressif32/cores/esp32/Print.h \
- .pio/libdeps/esp32-s3-devkitc-1-n16r8v/MD_MAX72XX/src/MD_MAX72xx.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/LedController/src/LedController.hpp \
  .pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit\ NeoPixel/Adafruit_NeoPixel.h \
  C:/.platformio/packages/framework-arduinoespressif32/cores/esp32/HardwareSerial.h \
  .pio/libdeps/esp32-s3-devkitc-1-n16r8v/TinyGPSPlus/src/TinyGPSPlus.h \

@@ -1,6 +1,6 @@
-mikalhart/TinyGPSPlus@^1.1.0
 sandeepmistry/LoRa@^0.8.0
+noah1510/LedController@^1.7.0
+mikalhart/TinyGPSPlus@^1.1.0
 adafruit/RTClib@^2.1.4
 adafruit/Adafruit NeoPixel@^1.12.5
 adafruit/Adafruit MPU6050@^2.2.6
-majicdesigns/MD_MAX72XX@^3.5.1

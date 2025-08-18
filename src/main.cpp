@@ -5,7 +5,7 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <stdint.h>
-#include <MD_MAX72xx.h>
+#include "LedController.hpp"
 #include <Adafruit_NeoPixel.h>
 #include <HardwareSerial.h>
 #include <TinyGPSPlus.h>
@@ -23,6 +23,7 @@
 
 // Display pins (max7219) 
 #define MAXCS 38        // GPIO38
+LedController display = LedController(MOSI_PIN, SCK_PIN, MAXCS);
 
 // NeoPixel LED strip
 #define WS2812_PIN 40  // GPIO40
@@ -57,6 +58,8 @@ static const uint32_t GPSBaud = 9600;
 #define ECT_PIN 20      // GPIO20 - Engine Temperature Signal
 #define EOT_PIN 19      // GPIO19 - Engine Oil Temperature Signal
 #define TPS 8           // GPIO8 - Throttle Position Sensor
+#define MAX_RPM 11000 
+#define MIN_RPM 4500  // RPM 게이지 시작 값
 
 //SD Card pins
 #define SD_CS 37       // GPIO37 - SD Card Chip Select
@@ -72,10 +75,19 @@ static const uint32_t GPSBaud = 9600;
 #define mode_pin 44 // GPIO44 - Mode Switch
 #define LED_pin 10 // GPIO10 - LED Control
 
+//RTC 세팅
 int microsCounter = 0; // 마이크로초 카운터
 
 void IRAM_ATTR onSQWInterrupt() {
     microsCounter = micros(); // SQW 핀에서 인터럽트 발생 시 현재 마이크로초 시간 저장
+}
+
+//RPM 측정용 변수
+volatile unsigned int pulseCounter = 0; // 인터럽트에서 사용할 펄스 카운터 (volatile 키워드 필수)
+const int pulsesPerRevolution = 1;      // 엔진 1회전 당 발생하는 펄스 수
+
+void IRAM_ATTR countPulse() {
+    pulseCounter++;
 }
 
 /// 센서 데이터 구조체
@@ -97,7 +109,6 @@ Adafruit_MPU6050 mpu;
 // RTC모듈
 RTC_DS1307 rtc;
 
-// TM1637Display display(CLK, DIO);
 Adafruit_NeoPixel leds(NUM_LEDS, WS2812_PIN, NEO_GRB + NEO_KHZ800);
 TinyGPSPlus gps;             // GPS 객체 생성
 // HardwareSerial gpsSerial(2); // Serial1 사용
@@ -124,7 +135,11 @@ void TelemetryTask(void *pvParameters);
 void setup()
 {
     Serial.begin(115200);
+    pinMode(RPM_PIN, INPUT_PULLUP); // 센서 신호 특성에 따라 INPUT 또는 INPUT_PULLUP 사용
+    attachInterrupt(digitalPinToInterrupt(RPM_PIN), countPulse, RISING); // 펄스의 상승 엣지(Rising Edge)에서 인터럽트 발생
+
     // SQW 핀 인터럽트 등록
+    pinMode(SQW_PIN, INPUT_PULLUP); // SQW 핀을 입력으로 설정
     attachInterrupt(digitalPinToInterrupt(SQW_PIN), onSQWInterrupt, RISING);
     // I2C 및 MPU6050 초기화
     Wire.begin(SDA_PIN, SCL_PIN);
@@ -149,6 +164,16 @@ void setup()
         }
     }
     Serial.println("RTC 연결 성공!");
+
+    // --- 기어 입력 핀 설정 ---
+    pinMode(G0, INPUT_PULLUP);
+    pinMode(G1, INPUT_PULLUP);
+    pinMode(G2, INPUT_PULLUP);
+    // --- MAX7219 디스플레이 초기화 ---
+    display.activateAllSegments();
+    display.setIntensity(10); // 밝기 설정 (0-15)
+    display.clearMatrix();
+
 
     // gps초기화
     // Ensure Serial1 is properly initialized and pins are configured
@@ -210,9 +235,21 @@ void SensorTask(void *pvParameters)
     sensors_event_t accelEvent, gyroEvent, tempEvent;
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms 주기 (100Hz)
+    int loopCounter = 0;
 
     for (;;)
     {
+        // 10번 루프마다 (즉, 10 * 10ms = 100ms 마다) RPM 계산
+        if (++loopCounter >= 10) {
+            loopCounter = 0; // 카운터 리셋
+
+            noInterrupts();
+            unsigned int currentPulseCount = pulseCounter;
+            pulseCounter = 0;
+            interrupts();
+            
+            data.rpm = (currentPulseCount * 600) / pulsesPerRevolution;
+        }
         // 센서 데이터 읽기
         mpu.getEvent(&accelEvent, &gyroEvent, &tempEvent);
         data.accelX = (int16_t)(accelEvent.acceleration.x * 1000);
@@ -235,7 +272,20 @@ void SensorTask(void *pvParameters)
         data.susFR = map(analogRead(CH2), 0, 4095, 0, 5000);
         data.susRL = map(analogRead(CH3), 0, 4095, 0, 5000);
         data.susRR = map(analogRead(CH4), 0, 4095, 0, 5000);
+        
+        // ## 기어 단수 계산 로직 ##----------------------------------
+        int gear_binary = (digitalRead(G2) << 2) | (digitalRead(G1) << 1) | digitalRead(G0);
 
+        switch (gear_binary) {
+            case 0b110: data.gear = 1; break;
+            case 0b101: data.gear = 2; break;
+            case 0b100: data.gear = 3; break;
+            case 0b011: data.gear = 4; break;
+            case 0b010: data.gear = 5; break;
+            case 0b111: data.gear = 0; break;
+            default:    data.gear = 6; break; // 0은 중립(Neutral)
+        }
+        //---------------------------------------------------------
         xQueueOverwrite(sensorQueue, &data);
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
@@ -261,9 +311,46 @@ void DisplayTask(void *pvParameters)
 
     for (;;)
     {
-
         if (xQueueReceive(sensorQueue, &latest, portMAX_DELAY) == pdTRUE)
         {
+            int ledsToShow;
+
+            // 1. 현재 RPM이 최소 RPM보다 낮은지 확인
+            if (latest.rpm < MIN_RPM) {
+                ledsToShow = 0; // 최소 RPM 미만이면 모든 LED를 끕니다.
+            } else {
+                // 2. 4500 ~ 11000 RPM 범위를 0 ~ 19개 LED로 매핑합니다.
+                ledsToShow = map(latest.rpm, MIN_RPM, MAX_RPM, 0, NUM_LEDS);
+            }
+            // 3. (이하 로직 동일) 각 LED의 색상을 설정합니다.
+            for (int i = 0; i < NUM_LEDS; i++)
+            {
+                if (i < ledsToShow) {
+                    // [켜져야 할 LED]
+                    int red, green;
+                    if (i >= NUM_LEDS - 4) {
+                        red = 255; green = 0;
+                    } else {
+                        red = 255; green = map(i, 0, NUM_LEDS - 5, 165, 0);
+                    }
+                    leds.setPixelColor(i, leds.Color(red, green, 0));
+                } else {
+                    // [꺼져야 할 LED]
+                    leds.setPixelColor(i, leds.Color(0, 0, 0));
+                }
+            }
+            leds.show();
+            
+            //7세그먼트 디스플레이 업데이트------------------------
+            display.setDigit(0, 0, latest.gear, false);
+            display.setDigit(0, 1, latest.coolantTemp/100, false);
+            display.setDigit(0, 2, (latest.coolantTemp/10)%10, false);
+            display.setDigit(0, 3, latest.coolantTemp%10, false);
+            display.setDigit(0, 4, latest.oilTemp/100, false);
+            display.setDigit(0, 5, (latest.oilTemp/10)%10, false);
+            display.setDigit(0, 6, latest.oilTemp%10, false);
+            ///------------------------------------------------
+
             // 데이터 출력
             char buffer[256];
             snprintf(buffer, sizeof(buffer),

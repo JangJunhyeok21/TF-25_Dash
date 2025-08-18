@@ -10,7 +10,7 @@
             "includePath": [
                 "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/include",
                 "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/src",
-                "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/MD_MAX72XX/src",
+                "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/LedController/src",
                 "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/RTClib/src",
                 "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/TinyGPSPlus/src",
                 "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit NeoPixel",
@@ -259,7 +259,7 @@
                 "path": [
                     "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/include",
                     "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/src",
-                    "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/MD_MAX72XX/src",
+                    "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/LedController/src",
                     "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/RTClib/src",
                     "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/TinyGPSPlus/src",
                     "D:/SynologyDrive/TACHYON/2025 Formula/Dash/TF-25_Dash/.pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit NeoPixel",
