@@ -1,400 +1,361 @@
 #include <Arduino.h>
-#include <Wire.h>
+#include <FreeRTOS.h>
 #include <SPI.h>
-#include <LoRa.h>
+#include <Wire.h>
+
+// --- 라이브러리 헤더 ---
+#include <Adafruit_NeoPixel.h>
+#include "LedController.hpp" // 7-Segment 라이브러리
+#include <SdFat.h>           // SD 카드 라이브러리
+#include "RTClib.h"          // RTC 라이브러리
+#include <TinyGPSPlus.h>     // GPS 라이브러리
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
-#include <stdint.h>
-#include "LedController.hpp"
-#include <Adafruit_NeoPixel.h>
-#include <HardwareSerial.h>
-#include <TinyGPSPlus.h>
-#include <FreeRTOS.h>
-#include "RTClib.h"
 
+// --- 핀 및 설정 정의 ---
+// 공유 SPI 버스 장치 CS 핀
+#define SD_CS   37
+#define LORA_CS 5
+#define MAXCS   38 // 7-Segment 및 74HCT245 버퍼 제어
 
-// SPI pins for LoRa
-#define SCK_PIN 14     // GPIO14 (MTMS)
-#define MISO_PIN 12    // GPIO12 (MTDI) 
-#define MOSI_PIN 13    // GPIO13 (MTCK)
-#define LORA_CS 5      // GPIO5 - NSS
-#define LORA_RST 4     // GPIO4 - RESET
-#define LORA_IRQ 42     // GPIO42 - DIO0
+// 커스텀 SPI 버스 핀
+#define SCK_PIN  14
+#define MISO_PIN 12
+#define MOSI_PIN 13
 
-// Display pins (max7219) 
-#define MAXCS 38        // GPIO38
-LedController display = LedController(MOSI_PIN, SCK_PIN, MAXCS);
+// I2C 핀
+#define SCL_PIN 35
+#define SDA_PIN 36
 
-// NeoPixel LED strip
-#define WS2812_PIN 40  // GPIO40
+// RPM 센서
+#define RPM_PIN 9
+#define MAX_RPM 11000
+#define MIN_RPM 4500
+const int pulsesPerRevolution = 1;
+
+// 기어 입력 핀
+#define G0 41
+#define G1 48
+#define G2 47
+
+// 유온(EOT) 센서
+#define EOT_PIN 19
+#define B_COEFFICIENT 4250
+#define NOMINAL_RESISTANCE 50000
+#define FIXED_RESISTOR 3300
+#define NOMINAL_TEMPERATURE 25
+
+// NeoPixel RPM 게이지
+#define WS2812_PIN 40
 #define NUM_LEDS 19
 
-// Suspension sensors (analog inputs)
-#define CH1 6           // GPIO6 - Front Left
-#define CH2 7           // GPIO7 - Front Right  
-#define CH3 16          // GPIO16 - Rear Left
-#define CH4 1           // GPIO1 - Rear Right
+// GPS
+#define RXPin 18
+#define TXPin 17
 
-// Steering angle sensor
-#define steering 2      // GPIO2 - Steering
+#define LED_PIN 10 // 상태 표시 LED
 
-// Power monitoring
-#define powerCheckPin 15  // GPIO15
+// --- 하드웨어 객체 생성 ---
+Adafruit_NeoPixel leds(NUM_LEDS, WS2812_PIN, NEO_GRB + NEO_KHZ800);
+LedController display = LedController(6, 7, MAXCS); // 7-Segment는 별도 SPI 버스를 사용할 수 있음
+SdFat sd;
+FsFile dataFile;
+RTC_DS3231 rtc;
+TinyGPSPlus gps;
+HardwareSerial gpsSerial(1);
+Adafruit_MPU6050 mpu;
 
-// I2C pins for MPU6050 and RTC
-#define SCL_PIN 35     // GPIO35 - I2C Clock
-#define SDA_PIN 36     // GPIO36 - I2C Data
-#define MPU6050_ADDRESS 0x69 // MPU6050 I2C address
-#define RTC_ADDRESS 0x68 // RTC I2C address
-#define SQW_PIN 43 // GPIO43 - SQW pin for RTC
+// --- 데이터 구조체 및 FreeRTOS 객체 ---
+struct SensorData {
+    char timestamp[25];
+    float accelX, accelY, accelZ, gyroX, gyroY, gyroZ;
+    uint16_t rpm, oilTemp;
+    double latitude, longitude;
+    uint16_t speed;
+};
+QueueHandle_t sensorQueue;
+SemaphoreHandle_t spiMutex; // ★ SPI 버스 보호를 위한 Mutex 추가
 
-// GPS UART pins
-#define RXPin 18       // GPIO18 - GPS TX
-#define TXPin 17       // GPIO17 - GPS RX
-static const uint32_t GPSBaud = 9600;
+// --- 전역 변수 ---
+volatile unsigned int pulseCounter = 0;
+bool rtcUpdatedByGps = false;
+char logFilePath[40];
 
-//Engine Signal
-#define RPM_PIN 9      // GPIO9 - RPM Signal
-#define ECT_PIN 20      // GPIO20 - Engine Temperature Signal
-#define EOT_PIN 19      // GPIO19 - Engine Oil Temperature Signal
-#define TPS 8           // GPIO8 - Throttle Position Sensor
-#define MAX_RPM 11000 
-#define MIN_RPM 4500  // RPM 게이지 시작 값
+// --- Task 함수 프로토타입 ---
+void SensorTask(void *pvParameters);
+void LoggerTask(void *pvParameters);
+void DisplayTask(void *pvParameters);
 
-//SD Card pins
-#define SD_CS 37       // GPIO37 - SD Card Chip Select
-#define SD_HWCD 39     // GPIO39 - SD Card Hardware CDC
-
-//gear input
-#define G0 41        // GPIO41 - Gear 0
-#define G1 48        // GPIO48 - Gear 1
-#define G2 47        // GPIO47 - Gear 2
-
-//etc pins
-#define Fan_pin 21 // GPIO21 - Fan Control
-#define mode_pin 44 // GPIO44 - Mode Switch
-#define LED_pin 10 // GPIO10 - LED Control
-
-//RTC 세팅
-int microsCounter = 0; // 마이크로초 카운터
-
-void IRAM_ATTR onSQWInterrupt() {
-    microsCounter = micros(); // SQW 핀에서 인터럽트 발생 시 현재 마이크로초 시간 저장
-}
-
-//RPM 측정용 변수
-volatile unsigned int pulseCounter = 0; // 인터럽트에서 사용할 펄스 카운터 (volatile 키워드 필수)
-const int pulsesPerRevolution = 1;      // 엔진 1회전 당 발생하는 펄스 수
-
+// --- 인터럽트 서비스 루틴 ---
 void IRAM_ATTR countPulse() {
     pulseCounter++;
 }
 
-/// 센서 데이터 구조체
-struct SensorData
-{
-    int16_t accelX, accelY, accelZ, yawRate, coolantTemp, oilTemp;
-    uint16_t rpm, susFL, susFR, susRL, susRR, speed;
-    int32_t latitude, longitude;
-    uint8_t tps, gear;
-    DateTime timestamp;
-};
 
-// FreeRTOS 객체
-QueueHandle_t sensorQueue;
-SemaphoreHandle_t dataMutex;
-
-// Adafruit MPU6050 객체
-Adafruit_MPU6050 mpu;
-// RTC모듈
-RTC_DS1307 rtc;
-
-Adafruit_NeoPixel leds(NUM_LEDS, WS2812_PIN, NEO_GRB + NEO_KHZ800);
-TinyGPSPlus gps;             // GPS 객체 생성
-// HardwareSerial gpsSerial(2); // Serial1 사용
-// KWP2000 kwp(&kwpSerial);
-
-// Task 함수 프로토타입
-void SensorTask(void *pvParameters);
-void LoggerTask(void *pvParameters);
-void DisplayTask(void *pvParameters);
-void TelemetryTask(void *pvParameters);
-/*
-소수점 시간 재는 함수-인터럽트 사용
-
-*/
-
-// // 전원종료 시 종료시퀀스
-// void powerOffSequence()
-// {
-//     lora.end();      // LoRa 종료
-//     kwpSerial.end(); // KWP 종료
-//     Serial1.end();   // GPS 종료
-// }
-
-void setup()
-{
+void setup() {
     Serial.begin(115200);
-    pinMode(RPM_PIN, INPUT_PULLUP); // 센서 신호 특성에 따라 INPUT 또는 INPUT_PULLUP 사용
-    attachInterrupt(digitalPinToInterrupt(RPM_PIN), countPulse, RISING); // 펄스의 상승 엣지(Rising Edge)에서 인터럽트 발생
+    delay(1000); // 시스템 안정화 및 시리얼 모니터 연결 시간
+    Serial.println("\n--- Student Formula DAQ System Booting ---");
 
-    // SQW 핀 인터럽트 등록
-    pinMode(SQW_PIN, INPUT_PULLUP); // SQW 핀을 입력으로 설정
-    attachInterrupt(digitalPinToInterrupt(SQW_PIN), onSQWInterrupt, RISING);
-    // I2C 및 MPU6050 초기화
+    // --- ★ 진단을 위해 GPS 초기화를 맨 앞으로 이동 ---
+    Serial.println("Attempting to initialize GPS Serial Port...");
+    gpsSerial.begin(9600, SERIAL_8N1, RXPin, TXPin);
+    Serial.println("GPS Serial Port Initialized.");
+
+    // --- 핀 모드 및 인터럽트 설정 ---
+    pinMode(RPM_PIN, INPUT_PULLUP);
+    pinMode(LED_PIN, OUTPUT);
+    attachInterrupt(digitalPinToInterrupt(RPM_PIN), countPulse, RISING);
+    pinMode(EOT_PIN, INPUT);
+
+    sensorQueue = xQueueCreate(1, sizeof(SensorData)); // ★ 큐 크기를 1로 변경
+    spiMutex = xSemaphoreCreateMutex();
+
+    // --- ★★★ 공유 SPI 버스 초기화 (가장 중요) ★★★ ---
+    Serial.println("Initializing Shared SPI Bus...");
+    delay(100); // SD카드 전원 안정화 시간
+    // 1. 다른 SPI 장치들 먼저 비활성화
+    pinMode(LORA_CS, OUTPUT); digitalWrite(LORA_CS, HIGH);
+    // pinMode(MAXCS, OUTPUT);   digitalWrite(MAXCS, HIGH);
+    // 2. 커스텀 핀으로 SPI 버스 초기화
+    SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, -1);
+    // 3. SD 카드 초기화
+    if (!sd.begin(SD_CS, SPI_QUARTER_SPEED)) {
+        digitalWrite(LED_PIN, HIGH); // 오류 표시
+        Serial.println("SD Card initialization failed! Halting.");
+        // sd.initErrorHalt(&Serial);
+    }else{
+        Serial.println("SD Card Initialized.");
+        xTaskCreatePinnedToCore(LoggerTask, "LoggerTask", 8192, NULL, 3, NULL, 1);
+        Serial.println("LoggerTask Created.");
+    }
+    Serial.println("Shared SPI Bus Initialized Successfully.");
+
+    // --- I2C 버스 및 센서 초기화 ---
     Wire.begin(SDA_PIN, SCL_PIN);
-    if (!mpu.begin(MPU6050_ADDRESS, &Wire))
-    {
-        Serial.println("MPU6050 초기화 실패!");
-        while (1)
-        {
-            Serial.println("MPU6050 초기화 실패!");
-            vTaskDelay(pdMS_TO_TICKS(10)); // 10ms 대기
-        }
-    }
-    Serial.println("MPU6050 연결 성공!");
-    // RTC 초기화
-    if (!rtc.begin())
-    {
-        while (1)
-        {
-            Serial.println("Couldn't find RTC");
-            Serial.flush();
-            vTaskDelay(pdMS_TO_TICKS(100)); // 100ms 대기
-        }
-    }
-    Serial.println("RTC 연결 성공!");
-
-    // --- 기어 입력 핀 설정 ---
-    pinMode(G0, INPUT_PULLUP);
-    pinMode(G1, INPUT_PULLUP);
-    pinMode(G2, INPUT_PULLUP);
-    // --- MAX7219 디스플레이 초기화 ---
-    display.activateAllSegments();
-    display.setIntensity(10); // 밝기 설정 (0-15)
-    display.clearMatrix();
-
-
-    // gps초기화
-    // Ensure Serial1 is properly initialized and pins are configured
-    // pinMode(RXPin, INPUT_PULLDOWN);
-    // Serial2.begin(9600, SERIAL_8N1, RXPin, TXPin);
-    // Serial.println("GPS 연결 성공!");
+    if (!rtc.begin()) { Serial.println("RTC not found! Halting."); while(1); }
+    if (!mpu.begin(0x69, &Wire)) { Serial.println("MPU6050 not found! Halting."); while(1); }
+    mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
+    mpu.setGyroRange(MPU6050_RANGE_500_DEG); // 각속도 범위 설정
+    Serial.println("I2C Bus: RTC & MPU6050 Initialized.");
     
-    //RPM게이지 세리모니
-    leds.begin();
-    leds.clear();
-    // 1초 동안 차오르는 애니메이션
-    for (int i = 0; i < NUM_LEDS; i++)
-    {
-        int red, green;
-        if (i >= NUM_LEDS - 4) // 끝 4개는 빨강 고정
-        {
-            red = 255;
-            green = 0;
-        }
-        else // 나머지는 그라데이션
-        {
-            red = map(i, 0, NUM_LEDS - 5, 255, 255); // 빨간색은 고정
-            green = map(i, 0, NUM_LEDS - 5, 165, 0); // 초록색은 점점 감소
-        }
-        int blue = 0; // 파란색은 없음
-        leds.setPixelColor(i, leds.Color(red, green, blue));
-        leds.show();
-        vTaskDelay(pdMS_TO_TICKS(1000 / NUM_LEDS));
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    
+
+    // --- 디스플레이 초기화 ---
+    leds.begin(); leds.clear(); leds.show();
+    display.activateAllSegments(); display.setIntensity(10); display.clearMatrix();
+    Serial.println("Displays Initialized.");
+
+    // --- 로그 파일 생성 ---
+    DateTime now = rtc.now();
+    char dirPath[12]; sprintf(dirPath, "/%04d%02d%02d", now.year(), now.month(), now.day());
+    if (!sd.exists(dirPath)) { sd.mkdir(dirPath); }
+    sprintf(logFilePath, "%s/%02d%02d%02d.csv", dirPath, now.hour(), now.minute(), now.second());
+    dataFile.open(logFilePath, FILE_WRITE);
+    if (dataFile) {
+        // CSV 헤더 작성
+        dataFile.println("Timestamp,AccelX,AccelY,AccelZ,GyroX,GyroY,GyroZ,RPM,OilTemp,Gear,Latitude,Longitude,Speed");
+        dataFile.close();
+        Serial.printf("Logging to: %s\n", logFilePath);
+    } else {
+        Serial.println("Failed to create log file! Halting.");
     }
-    // 1초 동안 가라앉는 애니메이션
-    for (int i = NUM_LEDS - 1; i >= 0; i--)
-    {
-        leds.setPixelColor(i, leds.Color(0, 0, 0)); // 꺼짐
-        leds.show();
-        vTaskDelay(pdMS_TO_TICKS(1000 / NUM_LEDS));
-    }
+    
+    // --- FreeRTOS 설정 ---
+    xTaskCreatePinnedToCore(SensorTask, "SensorTask", 4096, NULL, 2, NULL, 0);
+    Serial.println("SensorTask Created.");
+    xTaskCreatePinnedToCore(DisplayTask, "DisplayTask", 4096, NULL, 1, NULL, 1);
+    Serial.println("DisplayTask Created.");
 
-    // Queue 및 Mutex 생성
-    sensorQueue = xQueueCreate(1, sizeof(SensorData));
-    dataMutex = xSemaphoreCreateMutex();
-
-    //SD 카드 초기화
-    //CSV파일 생성 후 단위를 포함한 헤더 작성
-
-
-    // FreeRTOS Task 생성
-    xTaskCreatePinnedToCore(SensorTask, "SensorTask", 4096, NULL, 3, NULL, 1);
-    // xTaskCreatePinnedToCore(LoggerTask, "LoggerTask", 4096, NULL, 2, NULL, 1);
-    xTaskCreatePinnedToCore(DisplayTask, "DisplayTask", 4096, NULL, 2, NULL, 0);
-    // xTaskCreatePinnedToCore(TelemetryTask, "TelemetryTask", 4096, NULL, 2, NULL, 0);
+    Serial.println("--- System Ready ---");
 }
 
-void loop()
-{
+void loop() {
+    // 메인 루프는 비워둡니다. 모든 작업은 FreeRTOS 태스크에서 처리됩니다.
 }
-void SensorTask(void *pvParameters)
-{
+
+/**
+ * @brief 50Hz (20ms) 주기로 모든 센서 데이터를 읽어 큐로 전송하는 태스크
+ */
+void SensorTask(void *pvParameters) {
     SensorData data;
-    sensors_event_t accelEvent, gyroEvent, tempEvent;
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms 주기 (100Hz)
-    int loopCounter = 0;
+    int rpmLoopCounter = 0;
+    int tempLoopCounter = 0; // ★ 유온 계산 주기를 위한 카운터 추가
 
-    for (;;)
-    {
-        // 10번 루프마다 (즉, 10 * 10ms = 100ms 마다) RPM 계산
-        if (++loopCounter >= 10) {
-            loopCounter = 0; // 카운터 리셋
+    for (;;) {
+        // --- 시간 및 GPS 데이터 ---
+        while (gpsSerial.available() > 0) gps.encode(gpsSerial.read());
+        // GPS 시간 → KST(UTC+9) 변환 후 RTC 동기화
+        if (!rtcUpdatedByGps && gps.date.isValid() && gps.time.isValid() && gps.date.year() > 2020) {
+            int year = gps.date.year();
+            int month = gps.date.month();
+            int day = gps.date.day();
+            int hour = gps.time.hour();
+            int minute = gps.time.minute();
+            int second = gps.time.second();
 
+            // UTC+9 (KST) 변환
+            hour += 9;
+            if (hour >= 24) {
+            hour -= 24;
+            // 날짜 증가 (간단한 월말 처리)
+            static const int daysInMonth[] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
+            int dim = daysInMonth[month - 1];
+            // 윤년 처리
+            if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0))) dim = 29;
+            day++;
+            if (day > dim) {
+                day = 1;
+                month++;
+                if (month > 12) {
+                month = 1;
+                year++;
+                }
+            }
+            }
+
+            rtc.adjust(DateTime(year, month, day, hour, minute, second));
+            rtcUpdatedByGps = true;
+        }
+        DateTime now = rtc.now();
+        sprintf(data.timestamp, "%02d:%02d:%02d.%03d", now.hour(), now.minute(), now.second(), (millis() % 1000));
+        // --- GPS 좌표/속도 저장 ---
+        if (gps.location.isValid()) {
+            data.latitude = gps.location.lat();
+            data.longitude = gps.location.lng();
+        } else {
+            data.latitude = 0;
+            data.longitude = 0;
+        }
+        if (gps.speed.isValid()) {
+            data.speed = gps.speed.kmph();
+        } else {
+            data.speed = 0;
+        }
+        // --- MPU6050 ---
+        sensors_event_t a, g, temp;
+        mpu.getEvent(&a, &g, &temp);
+        data.accelX = a.acceleration.x; data.accelY = a.acceleration.y; data.accelZ = a.acceleration.z;
+        data.gyroX = g.gyro.x; data.gyroY = g.gyro.y; data.gyroZ = g.gyro.z;
+
+        // --- RPM (10Hz로 계산하여 CPU 부하 감소) ---
+        if (++rpmLoopCounter >= 5) { // 20ms * 5 = 100ms
+            rpmLoopCounter = 0;
             noInterrupts();
             unsigned int currentPulseCount = pulseCounter;
             pulseCounter = 0;
             interrupts();
-            
             data.rpm = (currentPulseCount * 600) / pulsesPerRevolution;
         }
-        // 센서 데이터 읽기
-        mpu.getEvent(&accelEvent, &gyroEvent, &tempEvent);
-        data.accelX = (int16_t)(accelEvent.acceleration.x * 1000);
-        data.accelY = (int16_t)(accelEvent.acceleration.y * 1000);
-        data.accelZ = (int16_t)(accelEvent.acceleration.z * 1000);
-        data.yawRate = (int16_t)(gyroEvent.gyro.z * 1000);
-        data.timestamp = rtc.now();
-        // while (Serial2.available() > 0)
-        // {
-        //     gps.encode(Serial2.read());
-        // }
-        // if (gps.location.isUpdated())
-        // {
-        //     data.longitude = gps.location.lng() * 1000000;
-        //     data.latitude = gps.location.lat() * 1000000;
-        //     data.speed = gps.speed.kmph();
-        // }
-
-        data.susFL = map(analogRead(CH1), 0, 4095, 0, 5000);
-        data.susFR = map(analogRead(CH2), 0, 4095, 0, 5000);
-        data.susRL = map(analogRead(CH3), 0, 4095, 0, 5000);
-        data.susRR = map(analogRead(CH4), 0, 4095, 0, 5000);
         
-        // ## 기어 단수 계산 로직 ##----------------------------------
-        int gear_binary = (digitalRead(G2) << 2) | (digitalRead(G1) << 1) | digitalRead(G0);
-
-        switch (gear_binary) {
-            case 0b110: data.gear = 1; break;
-            case 0b101: data.gear = 2; break;
-            case 0b100: data.gear = 3; break;
-            case 0b011: data.gear = 4; break;
-            case 0b010: data.gear = 5; break;
-            case 0b111: data.gear = 0; break;
-            default:    data.gear = 6; break; // 0은 중립(Neutral)
+        // --- 유온 (NTC) - 2Hz로 계산 (50ms * 10 = 500ms) ---
+        if (++tempLoopCounter >= 10) {
+            tempLoopCounter = 0;
+            int adcValue = analogRead(EOT_PIN);
+            if (adcValue > 10) {
+                float resistance = FIXED_RESISTOR * ((4095.0 / adcValue) - 1.0);
+                float steinhart = log(resistance / NOMINAL_RESISTANCE) / B_COEFFICIENT + 1.0 / (NOMINAL_TEMPERATURE + 273.15);
+                data.oilTemp = (uint16_t)((1.0 / steinhart) - 273.15);
+            } else { data.oilTemp = 0; }
         }
-        //---------------------------------------------------------
-        xQueueOverwrite(sensorQueue, &data);
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+        
+        xQueueOverwrite(sensorQueue, &data); // ★ 큐에 최신 데이터를 덮어씁니다.
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(50)); // 20Hz 주기 유지
     }
 }
 
-void LoggerTask(void *pvParameters)
-{
-    SensorData latest;
-    for (;;)
-    {
-        if (xQueueReceive(sensorQueue, &latest, portMAX_DELAY) == pdTRUE)
-        {
-            // SD 카드 기록 로직
-        }
-    }
-}
-
-void DisplayTask(void *pvParameters)
-{
-    SensorData latest;
+/**
+ * @brief 큐에서 최신 데이터를 주기적으로 받아와 SD 카드에 기록하는 태스크 (저속 로깅)
+ */
+void LoggerTask(void *pvParameters) {
+    // ★★★ 로거 로직 변경 ★★★
+    // 큐가 덮어쓰기 방식으로 변경되었으므로, 고속(20Hz)의 모든 데이터를 버퍼링할 수 없습니다.
+    // 대신, 약 10Hz(100ms) 주기로 최신 데이터를 하나씩 기록합니다.
+    SensorData dataToLog;
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(50); // 20Hz → 50ms로 확장
 
-    for (;;)
-    {
-        if (xQueueReceive(sensorQueue, &latest, portMAX_DELAY) == pdTRUE)
-        {
-            int ledsToShow;
+    for (;;) {
+        // 큐에서 최신 데이터를 하나 받아옵니다.
+        if (xQueueReceive(sensorQueue, &dataToLog, portMAX_DELAY)) {
+                // digitalWrite(MAXCS, HIGH); 
+                // digitalWrite(LORA_CS, HIGH);
 
-            // 1. 현재 RPM이 최소 RPM보다 낮은지 확인
-            if (latest.rpm < MIN_RPM) {
-                ledsToShow = 0; // 최소 RPM 미만이면 모든 LED를 끕니다.
-            } else {
-                // 2. 4500 ~ 11000 RPM 범위를 0 ~ 19개 LED로 매핑합니다.
-                ledsToShow = map(latest.rpm, MIN_RPM, MAX_RPM, 0, NUM_LEDS);
+                // ★ Mutex로 SPI 버스 접근 보호
+            if (xSemaphoreTake(spiMutex, portMAX_DELAY) == pdTRUE) {
+                if (dataFile.open(logFilePath, FILE_WRITE)) {
+                    dataFile.printf("%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%u,%.6f,%.6f,%.2f\n",
+                        dataToLog.timestamp,
+                        dataToLog.accelX, dataToLog.accelY, dataToLog.accelZ,
+                        dataToLog.gyroX, dataToLog.gyroY, dataToLog.gyroZ,
+                        dataToLog.rpm, dataToLog.oilTemp,
+                        dataToLog.latitude, dataToLog.longitude, dataToLog.speed);
+                    dataFile.close();
+                }
+                xSemaphoreGive(spiMutex); // ★ 작업 후 Mutex 반환
             }
-            // 3. (이하 로직 동일) 각 LED의 색상을 설정합니다.
-            for (int i = 0; i < NUM_LEDS; i++)
-            {
+        }
+        // 약 10Hz 주기로 로깅을 시도합니다.
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(100));
+    }
+}
+
+/**
+ * @brief 큐에서 데이터를 받아와 디스플레이를 업데이트하는 태스크 (약 30Hz)
+ */
+void DisplayTask(void *pvParameters) {
+    SensorData latestData;
+
+    for (;;) {
+        if (xQueueReceive(sensorQueue, &latestData, portMAX_DELAY) == pdTRUE) {
+            // --- LED RPM 게이지 업데이트 ---
+            int ledsToShow = (latestData.rpm < MIN_RPM) ? 0 : map(latestData.rpm, MIN_RPM, MAX_RPM, 0, NUM_LEDS);
+            for (int i = 0; i < NUM_LEDS; i++) {
                 if (i < ledsToShow) {
-                    // [켜져야 할 LED]
-                    int red, green;
-                    if (i >= NUM_LEDS - 4) {
-                        red = 255; green = 0;
-                    } else {
-                        red = 255; green = map(i, 0, NUM_LEDS - 5, 165, 0);
-                    }
+                    int red = 255;
+                    int green = (i >= NUM_LEDS - 4) ? 0 : map(i, 0, NUM_LEDS - 5, 165, 0);
                     leds.setPixelColor(i, leds.Color(red, green, 0));
                 } else {
-                    // [꺼져야 할 LED]
                     leds.setPixelColor(i, leds.Color(0, 0, 0));
                 }
             }
             leds.show();
-            
-            //7세그먼트 디스플레이 업데이트------------------------
-            display.setDigit(0, 0, latest.gear, false);
-            display.setDigit(0, 1, latest.coolantTemp/100, false);
-            display.setDigit(0, 2, (latest.coolantTemp/10)%10, false);
-            display.setDigit(0, 3, latest.coolantTemp%10, false);
-            display.setDigit(0, 4, latest.oilTemp/100, false);
-            display.setDigit(0, 5, (latest.oilTemp/10)%10, false);
-            display.setDigit(0, 6, latest.oilTemp%10, false);
-            ///------------------------------------------------
 
-            // 데이터 출력
-            char buffer[256];
-            snprintf(buffer, sizeof(buffer),
-                     "Timestamp: %04d/%02d/%02d %02d:%02d:%02d\n"
-                     "Accel X: %.3f m/s^2, Y: %.3f m/s^2, Z: %.3f m/s^2\n"
-                     "YawRate: %.3f rad/s\n",
-                     latest.timestamp.year(), latest.timestamp.month(), latest.timestamp.day(),
-                     latest.timestamp.hour(), latest.timestamp.minute(), latest.timestamp.second(),
-                     latest.accelX / 1000.0, latest.accelY / 1000.0, latest.accelZ / 1000.0,
-                     latest.yawRate / 1000.0);
-            Serial.print(buffer);
+            // ★ Mutex로 SPI 버스 접근 보호
+            if (xSemaphoreTake(spiMutex, portMAX_DELAY) == pdTRUE) {
+                // 7-Segment 업데이트를 위해 CS핀 제어
+                digitalWrite(MAXCS, LOW);
+
+                uint16_t temp = latestData.oilTemp;
+                if (temp > 321) temp = 321;
+                
+                // 온도가 100 미만일 때 앞자리 공백 처리
+                display.setChar(0, 1, (temp >= 100) ? (temp / 100) + '0' : ' ', false);
+                display.setChar(0, 2, (temp >= 10) ? ((temp / 10) % 10) + '0' : ' ', false);
+                display.setDigit(0, 3, temp % 10, false);
+                
+                if (latestData.speed > 199) latestData.speed = 199;
+                // 속도가 100 미만일 때 앞자리 공백 처리
+                display.setChar(0, 4, (latestData.speed >= 100) ? (latestData.speed / 100) + '0' : ' ', false);
+                display.setChar(0, 5, (latestData.speed >= 10) ? ((latestData.speed / 10) % 10) + '0' : ' ', false);
+                display.setDigit(0, 6, latestData.speed % 10, false);
+
+                digitalWrite(MAXCS, HIGH);
+                xSemaphoreGive(spiMutex); // ★ 작업 후 Mutex 반환
+            }
+            Serial.printf("%s | Accel: [%.2f, %.2f, %.2f] | Gyro: [%.2f, %.2f, %.2f] | RPM: %u | Oil: %u | GPS: %.6f, %.6f | %.2f km/h\n",
+            latestData.timestamp,
+            latestData.accelX, latestData.accelY, latestData.accelZ,
+            latestData.gyroX, latestData.gyroY, latestData.gyroZ,
+            latestData.rpm, latestData.oilTemp,
+            latestData.latitude, latestData.longitude, latestData.speed);
         }
-
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
 
-void TelemetryTask(void *pvParameters)
-{
-    SensorData latest;
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(100); // 100ms 주기 (10Hz)
 
-    for (;;)
-    {
-        //     if (xQueueReceive(sensorQueue, &latest, portMAX_DELAY) == pdTRUE)
-        //     {
-        //         // LoRa 전송 로직
-        //         LoRa.beginPacket();
-        //         LoRa.print(latest.accelX);      LoRa.print(",");
-        //         LoRa.print(latest.accelY);      LoRa.print(",");
-        //         LoRa.print(latest.accelZ);      LoRa.print(",");
-        //         LoRa.print(latest.speed);       LoRa.print(",");
-        //         LoRa.print(latest.latitude);    LoRa.print(",");
-        //         LoRa.print(latest.longitude);   LoRa.print(",");
-        //         LoRa.print(latest.rpm);         LoRa.print(",");
-        //         LoRa.print(latest.susFL);       LoRa.print(",");
-        //         LoRa.print(latest.susFR);       LoRa.print(",");
-        //         LoRa.print(latest.susRL);       LoRa.print(",");
-        //         LoRa.print(latest.susRR);       LoRa.print(",");
-        //         LoRa.print(latest.tps);         LoRa.print(",");
-        //         LoRa.print(latest.gear);        LoRa.print(",");
-        //         LoRa.print(latest.coolantTemp); LoRa.endPacket();
-        //     }
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
-    }
-}
+
+
+
+
