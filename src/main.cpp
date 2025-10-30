@@ -351,6 +351,10 @@ void DisplayTask(void *pvParameters) {
                     leds.setPixelColor(i, leds.Color(0, 0, 0));
                 }
             }
+            // 경고: 유온이 95도 이상이면 마지막 LED를 항상 빨간색으로 설정
+            if (latestData.oilTemp >= 95) {
+                leds.setPixelColor(NUM_LEDS - 1, leds.Color(255, 0, 0));
+            }
             leds.show();
 
             // ★ Mutex로 SPI 버스 접근 보호

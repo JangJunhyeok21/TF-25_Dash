@@ -179,22 +179,55 @@
  C:/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/esp_hw_support/include/soc/esp32/spiram.h \
  C:/.platformio/packages/framework-arduinoespressif32/cores/esp32/io_pin_remap.h \
  C:/.platformio/packages/framework-arduinoespressif32/cores/esp32/Arduino.h \
- C:/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src/Wire.h \
- C:/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal.h \
+ C:/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/freertos/include/freertos/FreeRTOS.h \
  C:/.platformio/packages/framework-arduinoespressif32/libraries/SPI/src/SPI.h \
  C:/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-spi.h \
- .pio/libdeps/esp32-s3-devkitc-1-n16r8v/LoRa/src/LoRa.h \
+ C:/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src/Wire.h \
+ C:/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit\ NeoPixel/Adafruit_NeoPixel.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/LedController/src/LedController.hpp \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/SdFat.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/ExFatLib.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/ExFatFormatter.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/../common/FsBlockDevice.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/SdCard/SdCard.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/SdCard/SdSpiCard/SdSpiCard.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/SdCard/SdSpiCard/../../common/SysCall.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/SdCard/SdSpiCard/../../common/../SdFatConfig.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/SdCard/SdSpiCard/../SdCardInfo.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/SdCard/SdSpiCard/../SdCardInterface.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/SdCard/SdSpiCard/../../common/FsBlockDeviceInterface.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/SdCard/SdSpiCard/SpiDriver/SdSpiDriver.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/SdCard/SdSpiCard/SpiDriver/SdSpiArduinoDriver.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/SdCard/SdSpiCard/SpiDriver/SdSpiLibDriver.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/ExFatVolume.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/ExFatFile.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/../common/FmtNumber.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/../common/FsApiConstants.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/../common/FsDateTime.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/../common/CompileDateTime.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/../common/FsName.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/ExFatPartition.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/../common/FsCache.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/../common/FsStructs.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/ExFatLib/../common/ArduinoFiles.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/FatLib/FatLib.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/FatLib/FatFormatter.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/FatLib/FatVolume.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/FatLib/FatFile.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/FatLib/FatPartition.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/FsLib/FsLib.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/FsLib/FsFile.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/FsLib/FsNew.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/FsLib/FsVolume.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/SdFat/src/FsLib/FsFormatter.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/RTClib/src/RTClib.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit\ BusIO/Adafruit_I2CDevice.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/TinyGPSPlus/src/TinyGPSPlus.h \
+ .pio/libdeps/esp32-s3-devkitc-1-n16r8v/TinyGPSPlus/src/TinyGPS++.h \
  .pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit\ MPU6050/Adafruit_MPU6050.h \
  .pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit\ BusIO/Adafruit_BusIO_Register.h \
  .pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit\ BusIO/Adafruit_GenericDevice.h \
- .pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit\ BusIO/Adafruit_I2CDevice.h \
  .pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit\ BusIO/Adafruit_SPIDevice.h \
  .pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit\ Unified\ Sensor/Adafruit_Sensor.h \
- C:/.platformio/packages/framework-arduinoespressif32/cores/esp32/Print.h \
- .pio/libdeps/esp32-s3-devkitc-1-n16r8v/MD_MAX72XX/src/MD_MAX72xx.h \
- .pio/libdeps/esp32-s3-devkitc-1-n16r8v/Adafruit\ NeoPixel/Adafruit_NeoPixel.h \
- C:/.platformio/packages/framework-arduinoespressif32/cores/esp32/HardwareSerial.h \
- .pio/libdeps/esp32-s3-devkitc-1-n16r8v/TinyGPSPlus/src/TinyGPSPlus.h \
- .pio/libdeps/esp32-s3-devkitc-1-n16r8v/TinyGPSPlus/src/TinyGPS++.h \
- C:/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/freertos/include/freertos/FreeRTOS.h \
- .pio/libdeps/esp32-s3-devkitc-1-n16r8v/RTClib/src/RTClib.h
+ C:/.platformio/packages/framework-arduinoespressif32/cores/esp32/Print.h
