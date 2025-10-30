@@ -33,10 +33,7 @@
 #define MIN_RPM 4500
 const int pulsesPerRevolution = 1;
 
-// 기어 입력 핀
-#define G0 41
-#define G1 48
-#define G2 47
+#define POWER 15
 
 // 유온(EOT) 센서
 #define EOT_PIN 19
@@ -68,10 +65,9 @@ Adafruit_MPU6050 mpu;
 // --- 데이터 구조체 및 FreeRTOS 객체 ---
 struct SensorData {
     char timestamp[25];
-    float accelX, accelY, accelZ, gyroX, gyroY, gyroZ;
+    float accelX, accelY, accelZ, gyroX, gyroY, gyroZ, speed;
     uint16_t rpm, oilTemp;
     double latitude, longitude;
-    uint16_t speed;
 };
 QueueHandle_t sensorQueue;
 SemaphoreHandle_t spiMutex; // ★ SPI 버스 보호를 위한 Mutex 추가
@@ -90,7 +86,6 @@ void DisplayTask(void *pvParameters);
 void IRAM_ATTR countPulse() {
     pulseCounter++;
 }
-
 
 void setup() {
     Serial.begin(115200);
@@ -116,7 +111,6 @@ void setup() {
     delay(100); // SD카드 전원 안정화 시간
     // 1. 다른 SPI 장치들 먼저 비활성화
     pinMode(LORA_CS, OUTPUT); digitalWrite(LORA_CS, HIGH);
-    // pinMode(MAXCS, OUTPUT);   digitalWrite(MAXCS, HIGH);
     // 2. 커스텀 핀으로 SPI 버스 초기화
     SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, -1);
     // 3. SD 카드 초기화
@@ -230,7 +224,7 @@ void SensorTask(void *pvParameters) {
             data.longitude = 0;
         }
         if (gps.speed.isValid()) {
-            data.speed = gps.speed.kmph();
+            data.speed = (float)gps.speed.kmph();
         } else {
             data.speed = 0;
         }
@@ -240,8 +234,11 @@ void SensorTask(void *pvParameters) {
         data.accelX = a.acceleration.x; data.accelY = a.acceleration.y; data.accelZ = a.acceleration.z;
         data.gyroX = g.gyro.x; data.gyroY = g.gyro.y; data.gyroZ = g.gyro.z;
 
-        // --- RPM (10Hz로 계산하여 CPU 부하 감소) ---
-        if (++rpmLoopCounter >= 5) { // 20ms * 5 = 100ms
+        // --- RPM (10Hz로 계산하여 CPU 부하 감소, 이동평균 필터 적용) ---
+        static uint16_t rpmBuffer[5] = {0};
+        static uint8_t rpmIndex = 0;
+        static uint8_t rpmCount = 0;
+        if (++rpmLoopCounter >= 2) { // 50ms * 2 = 100ms
             rpmLoopCounter = 0;
             noInterrupts();
             unsigned int currentPulseCount = pulseCounter;
@@ -251,14 +248,24 @@ void SensorTask(void *pvParameters) {
         }
         
         // --- 유온 (NTC) - 2Hz로 계산 (50ms * 10 = 500ms) ---
-        if (++tempLoopCounter >= 10) {
+        if (++tempLoopCounter >= 10) { // 500ms마다 유온 갱신 (2Hz)
             tempLoopCounter = 0;
             int adcValue = analogRead(EOT_PIN);
-            if (adcValue > 10) {
-                float resistance = FIXED_RESISTOR * ((4095.0 / adcValue) - 1.0);
-                float steinhart = log(resistance / NOMINAL_RESISTANCE) / B_COEFFICIENT + 1.0 / (NOMINAL_TEMPERATURE + 273.15);
-                data.oilTemp = (uint16_t)((1.0 / steinhart) - 273.15);
-            } else { data.oilTemp = 0; }
+            // 배선 구성: VCC -- [FIXED_RESISTOR] -- ADC노드 -- [NTC] -- GND
+            // 따라서 분압식: Vadc = Vcc * Rntc / (Rfixed + Rntc)
+            // => Rntc = Rfixed * (ADC / (ADCmax - ADC))
+            if (adcValue > 5 && adcValue < 4090) {
+                float rntc = (float)FIXED_RESISTOR * (float)adcValue / (4095.0f - (float)adcValue);
+                float steinhart = logf(rntc / NOMINAL_RESISTANCE) / B_COEFFICIENT + 1.0f / (NOMINAL_TEMPERATURE + 273.15f);
+                float tempC = (1.0f / steinhart) - 273.15f; // 섭씨
+                // 물리적 유효 범위 제한 (필요 시 조정)
+                if (tempC < 0) tempC = 0;
+                if (tempC > 200) tempC = 200;
+                data.oilTemp = (uint16_t)(tempC + 0.5f); // 반올림 후 1°C 단위
+            } else {
+                // 극단값: 센서 오픈/쇼트 가능 → 0으로 표시 (또는 이전값 유지 로직 가능)
+                data.oilTemp = 0;
+            }
         }
         
         xQueueOverwrite(sensorQueue, &data); // ★ 큐에 최신 데이터를 덮어씁니다.
@@ -328,18 +335,19 @@ void DisplayTask(void *pvParameters) {
                 digitalWrite(MAXCS, LOW);
 
                 uint16_t temp = latestData.oilTemp;
-                if (temp > 321) temp = 321;
+                if (temp > 999) temp = 999;
                 
                 // 온도가 100 미만일 때 앞자리 공백 처리
                 display.setChar(0, 1, (temp >= 100) ? (temp / 100) + '0' : ' ', false);
                 display.setChar(0, 2, (temp >= 10) ? ((temp / 10) % 10) + '0' : ' ', false);
                 display.setDigit(0, 3, temp % 10, false);
                 
-                if (latestData.speed > 199) latestData.speed = 199;
+                uint16_t speed = (uint16_t)latestData.speed;
+                if (speed > 199) speed = 199;
                 // 속도가 100 미만일 때 앞자리 공백 처리
-                display.setChar(0, 4, (latestData.speed >= 100) ? (latestData.speed / 100) + '0' : ' ', false);
-                display.setChar(0, 5, (latestData.speed >= 10) ? ((latestData.speed / 10) % 10) + '0' : ' ', false);
-                display.setDigit(0, 6, latestData.speed % 10, false);
+                display.setChar(0, 4, (speed >= 100) ? (speed / 100) + '0' : ' ', false);
+                display.setChar(0, 5, (speed >= 10) ? ((speed / 10) % 10) + '0' : ' ', false);
+                display.setDigit(0, 6, speed % 10, false);
 
                 digitalWrite(MAXCS, HIGH);
                 xSemaphoreGive(spiMutex); // ★ 작업 후 Mutex 반환
@@ -353,9 +361,3 @@ void DisplayTask(void *pvParameters) {
         }
     }
 }
-
-
-
-
-
-
