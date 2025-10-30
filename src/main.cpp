@@ -141,8 +141,9 @@ void setup() {
     Wire.begin(SDA_PIN, SCL_PIN);
     if (!rtc.begin()) { Serial.println("RTC not found! Halting."); while(1); }
     if (!mpu.begin(0x69, &Wire)) { Serial.println("MPU6050 not found! Halting."); while(1); }
-    mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
+    mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
     mpu.setGyroRange(MPU6050_RANGE_500_DEG); // 각속도 범위 설정
+    mpu.setFilterBandwidth(MPU6050_BAND_21_HZ); // 저역통과 필터 대역폭 설정
     Serial.println("I2C Bus: RTC & MPU6050 Initialized.");
     
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
